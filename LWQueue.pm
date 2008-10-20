@@ -70,7 +70,7 @@ sub push {
 
 	my $content = shift;
 #	$content = "{{serialized-perl}}" . freeze($content) if ref($content);
-	$content = "{{serialized-json}}" . objToJson($content) if ref($content);
+	$content = "{{serialized-json}}" . to_json($content) if ref($content);
 	my $command = encode_base64("PUSH-" . $self->{queue_name} . "-" . $content);
 	
 	print $handle $command . "=====\n";
@@ -101,7 +101,7 @@ sub pop {
 	if ($data =~ /^{{serialized-json}}/) {
 		$data =~ s/^{{serialized-json}}//;
 #		$data = thaw($data);
-		$data = jsonToObj($data);
+		$data = from_json($data);
 	}
 	
 	return $data;
