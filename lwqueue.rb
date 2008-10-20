@@ -7,7 +7,8 @@ class LWQueue
   require 'socket'
   require 'base64'
   require 'rubygems'
-  require_gem 'ruby-json'
+  require 'json/lexer'
+  require 'json/objects'
 
   def initialize(args)
     host = args[:server]
