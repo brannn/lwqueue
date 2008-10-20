@@ -1,0 +1,64 @@
+lwqueue
+
+SUMMARY
+  High performance, light weight queue daemon using TCP for speed.
+
+VERSION
+  See ./lwqueue for details
+
+AUTHOR
+  Peter Cooper
+  lwqueue@petercooper.co.uk
+  http://www.petercooper.co.uk/
+
+DESCRIPTION
+  A light-weight pre-forked TCP based queue daemon. 
+
+  Basically, it supports an "unlimited" number of queues with unique names,
+  on to which you can push and pop data. Push to the end, pop from the front.
+  Ideal for queueing systems, and ideal for cross application data transfer
+  where a queue is suited. Supplied libraries are (mostly) language agnostic,
+  and let you push simple data structures between Perl, Ruby, and Python. Ideal
+  to push data from, say, a Rails app to a backend Perl script (a mailer,
+  perhaps!)
+
+  If you're still confused, it's like Amazon Simple Queue but without the HTTP
+  overhead (which I tried initially, and it was slow as molasses).
+
+  Runs at well over 1000 ops a second on my local machine, but network 
+  performance is obviously less, but depends on bandwidth available, network
+  setup, latency, etc. benchmark.pl (and to a lesser extent benchmark.rb) can
+  be used to speed test.
+
+  Use simple clients to do initial tests locally before getting advanced.
+
+  See ./lwqueue for more details.
+
+LIBRARIES
+  Comes with Perl, Ruby, and Python client libraries which are all easy to use.
+  Most have only an initializer, and push and pop methods.
+
+  client-simple.pl, client-simple.py, and client-simple.rb are simple examples
+  of how to use these routines to interface with lwqueue.
+
+  JSON serialization used for cross language support, which means extra modules
+  or libraries are required. For Ruby, rubygems and ruby-json gem required. For
+  Perl, "JSON" module required. For Python, simplejson required. These can be
+  overriden with native serialization methods if you want to though, but I need
+  cross language support :)
+
+LICENSE
+  Use for any legal purpose, attribution in source or documentation required. 
+  E-mail appreciated.
+
+HELP?
+  My Python knowledge is as close to zero as it gets, so if you can make it
+  support larger item sizes and, well, just do anything you can with the Python
+  stuff, I'd really appreciate it and mix your work into the next version.
+  Ditto for all other languages, as I am no hardcore hacker.
+
+DISCLAIMER
+  You use this code under the condition that use of this code is entirely at 
+  your own risk! I, or anyone who supplies this code, has no responsibility 
+  for what it does on your system. Please read the source code to make sure you
+  are comfortable with it!

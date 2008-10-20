@@ -1,0 +1,270 @@
+#!/usr/bin/perl
+
+# lwqueue
+#
+# SUMMARY
+#   High performance, light weight queue daemon using TCP for speed
+#
+# VERSION
+#   0.2 - March 29, 2006
+#   nee 0.1 - March 4, 2006
+#
+# AUTHOR
+#   Peter Cooper
+# 	lwqueue@petercooper.co.uk
+#   http://www.petercooper.co.uk/
+#
+# DESCRIPTION
+#   A light-weight pre-forked TCP based queue daemon written in Perl. Very simple to set up and use,
+#   very fast (over 1000 operations a second on my slow test box), and effective.  It supports both
+#   a memory mapped file or memcached for storage. memcached is not fast on OS X unless you tweak the
+#   build though, see: http://lists.danga.com/pipermail/memcached/2006-March/002027.html
+#
+#   lwqueue works on systems that support forking POSIX-style, so probably not Windows (except under
+#   Cygwin perhaps). It is tested on OS X and Linux, however.
+#
+#   Maximum queue length is tweakable, but default set to 1,000,000 before loop around. It can be
+#   extended up to 2^32, but if you need to queue over 1 million items per queue, this may not be
+#   hardcore enough for you in any case
+#
+#   Perl, Ruby, and Python client libraries are available (Ruby's are nicest!)
+#
+#   It could all do with some optimization, particularly at the getting/setting end, but is do-able
+#   for now.
+#
+# LICENSE
+#   Use for any legal purpose, attribution in source or documentation required. E-mail appreciated.
+#
+# DISCLAIMER
+#   You use this code under the condition that use of this code is entirely at your own risk! I,
+#   or anyone who supplies this code, has no responsibility for what it does on your system.
+#   Please read the source code to make sure you are comfortable with it!
+
+my $version = "0.2"; $|++;
+
+use Net::TCP::Server;
+use MIME::Base64;
+use Data::Dumper;
+
+
+
+# --------------------------------------------------------
+# SETTINGS
+# --------------------------------------------------------
+
+# Log requests and errors to this file
+my $logFile = "/tmp/lwqueue.log";		
+
+# String of IPs of machines allowed to use lwqueue separated with spaces
+# It will match ranges by specifying (numerically) the most significant portions of the IP
+# So.. 67.15 means any IP starting with 67.15 will be allowed through.. Not a standard ACL but hey!
+# Leave $allowed BLANK if you want ALL connections to succeed
+# Example: my $allowed = "67.15 127.0.0.1 81.178 1.2.3.4";
+my $allowed = "";
+
+# Default cache storage time in seconds (86400 = 24 hours)
+my $cacheTime = 86400;
+
+# Local port on which to run lwqueue
+my $port = 3130;					
+
+# Local IP address on which to run lwqueue (specify none to run locally promiscuous/default IP - varies by OS)	
+my $ip = "";
+
+
+# EXTERNAL CACHE/STORAGE SETTINGS
+# -------
+
+# The queue(s) have to be stored somewhere. You get two options. A mmapped file or a memcached server.
+
+my $cache;
+
+# Choose between one of the following caching methods
+# Cache::FastMmap is fine in 99% of cases and easier
+# Uncomment the two intended lines for the cache of your choice
+
+# Cache::FastMmap ..
+		use Cache::FastMmap; my $cacheSystem = "mmap";
+		my $cacheFile = "/tmp/lwqueue.cache";
+
+# OR
+
+# Memcached ..
+#		use Cache::Memcached; my $cacheSystem = "memcache";
+#		my $cacheServer = "192.168.1.70:3030";
+
+
+# --------------------------------------------------------
+# NOTHING TO GENERALLY EDIT BELOW HERE
+# --------------------------------------------------------
+
+
+open (LOGF, ">>" . $logFile);
+print LOGF "lwqueue starting\n";
+
+$SIG{CHLD} = 'IGNORE';
+
+
+# Set up the cache
+if ($cacheSystem eq 'mmap') {
+	$cache = Cache::FastMmap->new( init_file => 1, num_pages => 223, page_size => "256k" , expire_time => "24h", share_file => $cacheFile );
+	warn ("fastmmap cache initialized");
+}
+
+if ($cacheSystem eq 'memcache') {
+	$cache = new Cache::Memcached { 'servers' => [ $cacheServer ], 'debug' => 0, 'compress_threshold' => 10000 };
+	unless ($cache->set("xyzzyxyzzyxyzzy", 1)) {
+		die "Cannot connect to memcached at $cacheServer";
+	}
+	warn ("connected to memcached at $cacheServer");
+}
+
+
+# Set up the daemon
+
+my $lh;
+
+if ($ip) {
+	$lh = Net::TCP::Server->new($ip, $port) or die "Cannot operate on port $port at $ip at this time";
+} else {
+	$lh = Net::TCP::Server->new($port) or die "Cannot operate on port $port at this time";
+}
+
+print LOGF "lwqueue started\n";
+warn ("lwqueue started");
+
+# Accept connections and fork for each
+
+while ($sh = $lh->accept) {
+
+	# Get remote machine's IP address
+	my $ip = $sh->remaddr;
+	
+	# Check IP address against access control list
+	my $invalid = 1;
+	my @alloweds = split(/\s/, $allowed);
+	foreach (@alloweds) { if ($ip =~ /^$_/) { $invalid = 0; } }
+
+	if (($invalid) && !($allowed eq '')) {
+		close $sh;
+		print LOGF "$ip FAILED CONNECT\n";
+		next;
+	}
+	
+	# Do the forking
+    defined($pid=fork) or die "fork: $!\n";
+    if ($pid) {             # Parent doesn't need client fh
+		$sh->stopio;
+    	next;
+    }
+
+    # Child doesn't need listener fh
+    $lh->stopio;
+    
+	print LOGF "$ip CONNECTED\n";
+
+	# Deal with client
+	my $data = "";
+    
+	while (<$sh>) {
+		s/\s+$//g;
+		s/^\s+//g;
+		last if /^quit$/;
+    
+		$data .= $_;
+
+		# We use base64 everywhere, so this is, I think, a viable terminator
+		if (/\=\=\=\=\=/) {
+			$data = &handle_request($data);
+			
+			if ($data->{method} eq 'PUSH') {
+				print LOGF "$ip PUSH [" . $data->{queue_name} . "][" . $data->{content} . "]\n";
+				print $sh "OK=====\n";
+			}
+
+			if ($data->{method} eq 'POP') {
+				print LOGF "$ip POP [" . $data->{queue_name} . "]\n";
+				print $sh encode_base64($data->{content}) . "\n=====\n";
+			}
+			
+			$data = "";
+		}
+			
+	}
+	
+	print LOGF "$ip DISCONNECTED\n";
+	close $sh;
+}
+
+close (LOGF);
+
+
+sub handle_request {
+	my $data = shift;
+	$data = decode_base64($data);
+	(my $cmd, my $queue_name) = ($data =~ /^(\w+)\-(\w+)/);
+	$data =~ s/^\w+\-\w+\-//;
+	
+	my $return;
+		
+	
+		if ($cmd =~ /^pop$/i) { 
+			# See if queue counter exists for this queue
+			my $queue = $cache->get("lwq:qr:" . $queue_name);
+			if ($queue) {
+				my $queue_position = $$queue;
+				$return->{content} = $queue_position;
+				
+				my $content = $cache->get("lwq:q:" . $queue_name . ":" . $queue_position);
+				if ($content) {
+					$cache->delete("lwq:q:" . $queue_name . ":" . $queue_position) if ($cacheSystem eq 'memcache');
+					$cache->remove("lwq:q:" . $queue_name . ":" . $queue_position) if ($cacheSystem eq 'mmap');
+					$return->{content} = $content->{content};
+					$return->{contenttype} = $content->{contenttype};
+					$return->{pragma} = $queue_position;
+					$queue_position++;
+					if ($queue_position == 1000001) { $queue_position = 0; }
+					$cache->set("lwq:qr:" . $queue_name, \$queue_position) if ($cacheSystem eq 'mmap');
+					$cache->set("lwq:qr:" . $queue_name, \$queue_position, $cacheTime) if ($cacheSystem eq 'memcache');
+				} else {
+					
+					$return->{code} = 204;
+					$return->{content} = "";
+				}
+			} else {
+				$return->{code} = 404;
+				$return->{content} = "No such queue";
+			}
+		}
+
+
+		# Are we adding something to a queue? (push)
+
+		if ($cmd =~ /^push$/i) { 
+			# See if queue counter exists for this queue
+			my $queue = $cache->get("lwq:qs:" . $queue_name);
+			my $queue_position = 0;
+			if ($queue) {
+				$queue_position = $$queue;
+			} else {
+				$cache->set("lwq:qr:" . $queue_name, \"0") if ($cacheSystem eq 'mmap');
+				$cache->add("lwq:qr:" . $queue_name, \"0", $cacheTime) if ($cacheSystem eq 'memcache');				
+				$cache->set("lwq:qs:" . $queue_name, \"0") if ($cacheSystem eq 'mmap');
+				$cache->add("lwq:qs:" . $queue_name, \"0", $cacheTime) if ($cacheSystem eq 'memcache');				
+			}
+
+			$cache->set("lwq:q:" . $queue_name . ":" . $queue_position, { content => $data, contenttype => "text/plain" }) if ($cacheSystem eq 'mmap');
+			$cache->set("lwq:q:" . $queue_name . ":" . $queue_position, { content => $data, contenttype => "text/plain" }, $cacheTime) if ($cacheSystem eq 'memcache');
+
+			$return->{content} = "$queue_name $queue_position OK";
+			
+			$queue_position++;
+			
+			if ($queue_position == 1000001) { $queue_position = 0; }
+			$cache->set("lwq:qs:" . $queue_name, \$queue_position) if ($cacheSystem eq 'mmap');
+			$cache->replace("lwq:qs:" . $queue_name, \$queue_position, $cacheTime) if ($cacheSystem eq 'memcache');
+		}
+	
+	
+	return { method => $cmd, queue_name => $queue_name, content => $return->{content} };
+}
