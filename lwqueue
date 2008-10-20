@@ -107,7 +107,7 @@ $SIG{CHLD} = 'IGNORE';
 
 # Set up the cache
 if ($cacheSystem eq 'mmap') {
-	$cache = Cache::FastMmap->new( init_file => 1, num_pages => 223, page_size => "256k" , expire_time => "24h", share_file => $cacheFile );
+	$cache = Cache::FastMmap->new( init_file => 1, num_pages => 223, page_size => "256k" , expire_time => "24h", share_file => $cacheFile, enable_stats => 1 );
 	warn ("fastmmap cache initialized");
 }
 
